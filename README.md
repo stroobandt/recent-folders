@@ -18,6 +18,9 @@ REQUIRES
 
     Automatically installed from PyPI: lxml, pandas, screeninfo
 
+    Many GNU/Linux distributions come with a 'folder-recent' icon
+    that can be used to create a launcher.
+
 
 COPYRIGHT
 
