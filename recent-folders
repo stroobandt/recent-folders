@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+
+
+VERSION = '20220608'
+
+
+'''
+DESCRIPTION
+
+    Opens a list of recently used folders on the desktop.
+    The chosen folder is opened with the default file manager.
+
+
+USAGE
+
+    $ recent-folders
+
+
+REQUIRES
+
+    System package zenity is usually preinstalled with the desktop
+    environment, if not:
+
+        $ sudo apt install zenity
+
+    Automatically installed from PyPI: lxml, pandas, screeninfo
+
+
+COPYRIGHT
+
+    Copyright (C) 2012-2022 Serge Y. Stroobandt
+    Copyright (C) 2014      Martin Hansen
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+
+CONTACT
+
+    echo c2VyZ2VAc3Ryb29iYW5kdC5jb20K |base64 -d
+
+
+TODO
+
+    - Implement module xdg.RecentFiles for desktop environments
+      complying with XDG Recent File Spec 0.2.
+
+'''
+
+
+### IMPORTS ###
+
+
+# Standard library imports
+import os
+import urllib.parse
+
+
+# PyPI imports
+import pkg_resources, subprocess, sys
+
+modules   = {'lxml.etree', 'pandas', 'screeninfo'}
+required  = {m.split('.')[0] for m in modules}
+installed = {pkg.key for pkg in pkg_resources.working_set}
+missing   = required - installed
+
+if missing:
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--upgrade', 'pip'])
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', *missing])
+
+for module in set.union(required, modules):
+    globals()[module] = __import__(module)
+
+
+### FUNCTIONS ###
+
+
+def get_desktop_environment():
+    # Copyright (C) 2014 Martin Hansen
+    # Copyright (C) 2022 Serge Y. Stroobandt
+    # https://stackoverflow.com/a/21213358/2192488
+    # https://ubuntuforums.org/showthread.php?t=652320
+    # https://ubuntuforums.org/showthread.php?t=652320
+    # https://ubuntuforums.org/showthread.php?t=1139057
+
+    if sys.platform in ['win32', 'cygwin']:
+        return 'windows'
+
+    elif sys.platform == 'darwin':
+        return 'mac'
+
+    else: # most likely either a POSIX system or something not very common
+
+        desktop_session = os.environ.get('DESKTOP_SESSION')
+
+        if desktop_session is not None:
+            desktop_session = desktop_session.lower()
+            if desktop_session in ['gnome','unity', 'cinnamon', 'mate', 'xfce4', 'lxde', 'fluxbox',
+                                   'blackbox', 'openbox', 'icewm', 'jwm', 'afterstep','trinity', 'kde']:
+                return desktop_session
+
+            ## Special cases ##
+            # Canonical sets $DESKTOP_SESSION to Lubuntu rather than LXDE if using LXDE.
+            # There is no guarantee that they will not do the same with the other desktop environments.
+            elif 'xfce' in desktop_session or desktop_session.startswith('xubuntu'):
+                return 'xfce4'
+            elif desktop_session.startswith('ubuntustudio'):
+                return 'kde'
+            elif desktop_session.startswith('ubuntu'):
+                return 'gnome'
+            elif desktop_session.startswith('lubuntu'):
+                return 'lxde'
+            elif desktop_session.startswith('kubuntu'):
+                return 'kde'
+            elif desktop_session.startswith('razor'):    # e.g. razorkwin
+                return 'razor-qt'
+            elif desktop_session.startswith('wmaker'):   # e.g. wmaker-common
+                return 'windowmaker'
+
+        if os.environ.get('KDE_FULL_SESSION') == 'true':
+            return 'kde'
+
+        elif os.environ.get('GNOME_DESKTOP_SESSION_ID'):
+            if not 'deprecated' in os.environ.get('GNOME_DESKTOP_SESSION_ID'):
+                return 'gnome2'
+
+        # https://ubuntuforums.org/showthread.php?t=652320
+        elif self.is_running('xfce-mcs-manage'):
+            return 'xfce4'
+
+        elif self.is_running('ksmserver'):
+            return 'kde'
+
+    return 'unknown'
+
+
+### CLASSES ###
+
+
+class Recent:
+
+    def __init__(self):
+
+        self.desktop = get_desktop_environment()
+
+        if self.desktop in {}:    # TODO
+            # XDG Recent File Spec 0.2
+            self.xdg = True
+            self.recently = os.path.expanduser('~/.recently-used')
+        else:
+            # XFCE4 and Mate not compliant with XDG Recent File Spec 0.2.
+            self.xdg = False
+            self.recently = os.path.expanduser('~/.local/share/recently-used.xbel')
+
+        try:
+            self.tree = lxml.etree.parse(self.recently)
+        except:
+            print()
+            print('Recent Folders v' + VERSION)
+            print('Error: The recently-used file was not found or is corrupt. Exiting.')
+            print()
+            sys.exit(1)
+
+
+    def find(self):
+
+        self.folders = []
+        self.max_length = 80
+
+        if self.xdg:
+            # TODO Employ module xdg.RecentFiles.
+            pass
+
+        else:
+            # All bookmarks retrieved by the parser
+            self.bookmarks = self.tree.findall('bookmark')
+
+            for bookmark in self.bookmarks:
+
+                # Get href attribute and remove file:// and file name.
+                href = bookmark.attrib['href']
+                href = href.replace('file://', '')
+                href = href.rpartition('/')[0] + '/'
+
+                # Remove %20 etc.
+                folder = urllib.parse.unquote(href)
+                self.max_length = max(len(folder), self.max_length)
+
+                if folder == '/tmp/' or folder.find('/.cache') >= 0:
+                    continue
+
+                # Test if the folder still exists.
+                if os.path.exists(folder):
+                    self.folders.append(folder)
+
+        # Reverse the array order; most recent folders first.
+        self.folders.reverse()
+
+        # Only unique folders in order of last used.
+        self.folders = pandas.unique(self.folders).tolist()
+
+        return self.folders
+
+
+    def delete(self):
+
+        if self.xdg:
+            pass
+
+        else:
+            for bookmark in self.bookmarks:
+                bookmark.getparent().remove(bookmark)
+
+        self.tree.write(self.recently, pretty_print=True, xml_declaration=True, encoding='UTF-8')
+
+
+### MAIN ###
+
+
+recent = Recent()
+
+clear_text = '⚠ 𝗖𝗹𝗲𝗮𝗿 𝗿𝗲𝗰𝗲𝗻𝘁 𝗳𝗼𝗹𝗱𝗲𝗿 𝗹𝗶𝘀𝘁 ⚠'
+chosen = ''
+while chosen == '':
+
+    folders = recent.find()
+
+    # Add the user's home folder at the beginning of the list.
+    folders.insert(0, '~/')
+
+    # Add a clear folder list option at the end of the list.
+    folders.append(clear_text)
+
+    # Get the screen height of the main monitor.
+    # There is no primary monitor in a single monitor setup.
+    # https://stackoverflow.com/a/2364277/2192488
+    monitors = screeninfo.get_monitors()
+    main_monitor = next((m for m in monitors if m.is_primary), monitors[0])
+
+    width  = min(int(0.8 * main_monitor.width), recent.max_length * 8)
+    height = int(0.8 * main_monitor.height)
+
+    # Choose a folder from the list.
+    try:
+        # string.split() is required because of:
+        #   TypeError: can only concatenate str (not "list") to str
+        output  = ('zenity --width=%d --height=%d' % (width, height)).split()
+        output += ['--title']
+        output += ['Recent Folders v' + VERSION]
+        output += '--list --text'.split()
+        output += ['Open ...']
+        output += '--column Folder'.split()
+        output += folders
+
+        chosen = subprocess.check_output(output)
+
+        # Convert to a string and slice off the newline.
+        chosen = str(chosen, 'utf-8')[:-1]
+
+    except:
+        # Main window was cancelled.
+        sys.exit()
+
+    # Delete the recent folder list.
+    if chosen == clear_text:
+        try:
+            # Confirm deletion.
+            output  = 'zenity --width=320 --question --title'.split()
+            output += ['Recent Folders']
+            output += '--text'.split()
+            output += ['Delete the list of recently used folders?']
+            output += '--ok-label Delete --cancel-label Abort'.split()
+            subprocess.check_output(output)
+
+            # Delete bookmarks.
+            recent.delete()
+
+        except:
+            # Deletion aborted.
+            pass
+
+        chosen = ''
+
+# Open the chosen folder.
+chosen = os.path.expanduser(chosen)
+subprocess.Popen(['/usr/bin/xdg-open', chosen])
